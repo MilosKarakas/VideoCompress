@@ -1,7 +1,7 @@
 import Flutter
 import AVFoundation
 
-public class SwiftVideoCompressPlugin: NSObject, FlutterPlugin {
+public class VideoCompressPlugin: NSObject, FlutterPlugin {
     private let channelName = "video_compress"
     private var exporter: AVAssetExportSession? = nil
     private var stopCommand = false
@@ -14,7 +14,7 @@ public class SwiftVideoCompressPlugin: NSObject, FlutterPlugin {
     
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "video_compress", binaryMessenger: registrar.messenger())
-        let instance = SwiftVideoCompressPlugin(channel: channel)
+        let instance = VideoCompressPlugin(channel: channel)
         registrar.addMethodCallDelegate(instance, channel: channel)
     }
     
@@ -42,8 +42,9 @@ public class SwiftVideoCompressPlugin: NSObject, FlutterPlugin {
             let duration = args!["duration"] as? Double
             let includeAudio = args!["includeAudio"] as? Bool
             let frameRate = args!["frameRate"] as? Int
+            let fileLengthLimit = args!["fileLengthLimit"] as? Int
             compressVideo(path, quality, deleteOrigin, startTime, duration, includeAudio,
-                          frameRate, result)
+                          frameRate, fileLengthLimit, result)
         case "cancelCompression":
             cancelCompression(result)
         case "deleteAllCache":
@@ -176,12 +177,16 @@ public class SwiftVideoCompressPlugin: NSObject, FlutterPlugin {
     
     private func compressVideo(_ path: String,_ quality: NSNumber,_ deleteOrigin: Bool,_ startTime: Double?,
                                _ duration: Double?,_ includeAudio: Bool?,_ frameRate: Int?,
+                               _ fileLengthLimit: Int?,
                                _ result: @escaping FlutterResult) {
         let sourceVideoUrl = Utility.getPathUrl(path)
         let sourceVideoType = "mp4"
         
         let sourceVideoAsset = avController.getVideoAsset(sourceVideoUrl)
         let sourceVideoTrack = avController.getTrack(sourceVideoAsset)
+        guard let videoTrack = sourceVideoTrack else {
+            return result(FlutterError(code: channelName,message: "compressVideo error",details: "No video track found in \(path)"))
+        }
 
         let uuid = NSUUID()
         let compressionUrl =
@@ -200,14 +205,20 @@ public class SwiftVideoCompressPlugin: NSObject, FlutterPlugin {
         
         let isIncludeAudio = includeAudio != nil ? includeAudio! : true
         
-        let session = getComposition(isIncludeAudio, timeRange, sourceVideoTrack!)
+        let session = getComposition(isIncludeAudio, timeRange, videoTrack)
         
-        let exporter = AVAssetExportSession(asset: session, presetName: getExportPreset(quality))!
+        guard let exporter = AVAssetExportSession(asset: session, presetName: getExportPreset(quality)) else {
+            return result(FlutterError(code: channelName,message: "compressVideo error",details: "Could not create an export session for \(path)"))
+        }
         
         exporter.outputURL = compressionUrl
         exporter.outputFileType = AVFileType.mp4
         exporter.shouldOptimizeForNetworkUse = true
-        
+
+        if let fileLengthLimit = fileLengthLimit {
+            exporter.fileLengthLimit = Int64(fileLengthLimit)
+        }
+
         if frameRate != nil {
             let videoComposition = AVMutableVideoComposition(propertiesOf: sourceVideoAsset)
             videoComposition.frameDuration = CMTimeMake(value: 1, timescale: Int32(frameRate!))
